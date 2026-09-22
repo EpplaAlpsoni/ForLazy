@@ -1,4 +1,5 @@
 import os
+from queue import SimpleQueue
 import stat
 import tempfile
 import unittest
@@ -11,7 +12,7 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
-from dbus_next import Variant
+from dbus_next import Message, MessageType, Variant
 from main import ForLazyWindow
 from clicker import X11Clicker
 from portal import PortalClicker
@@ -152,6 +153,32 @@ class WindowTests(unittest.TestCase):
         self.assertIs(self.window.focusWidget(), self.window.toggle_button)
         QTest.keyClick(self.window, Qt.Key.Key_F8, Qt.KeyboardModifier.ControlModifier)
         self.assertTrue(self.window.active)
+
+    def test_wayland_portal_events_toggle_without_focus_and_disable_local_duplicates(self):
+        self.backend.global_keys = False
+        self.backend.shortcut_bindings = {"toggle": "F9", "escape": "Esc"}
+        self.backend.shortcut_pending = False
+        self.backend.shortcut_status = "Global shortcuts active"
+        events = []
+        def take_events():
+            result = events[:]
+            events.clear()
+            return result
+        self.backend.take_shortcut_events = take_events
+        self.window.update_hotkeys()
+        self.assertTrue(all(not key.isEnabled() for key in self.window.local_shortcuts))
+        self.assertFalse(self.window.isActiveWindow())
+        events.append("toggle")
+        self.window.poll()
+        self.assertTrue(self.window.active)
+        events.append("toggle")
+        self.window.poll()
+        self.assertFalse(self.window.active)
+        self.assertIn("F9", self.window.toggle_button.text())
+        self.backend.shortcut_bindings = {}
+        self.window.poll()
+        self.assertTrue(all(key.isEnabled() for key in self.window.local_shortcuts))
+        self.assertIn("focused", self.window.help_text.text())
 
     def test_editing_repeat_count_selects_finite_repeat(self):
         self.assertTrue(self.window.repeat_forever.isChecked())
@@ -349,6 +376,105 @@ class PortalTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await backend._click(1)
         self.assertEqual(backend._call.call_args.args[2][-1], 0)
+
+
+class GlobalShortcutTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.backend = PortalClicker.__new__(PortalClicker)
+        self.backend.session = "/pointer/session"
+        self.backend.pending = {}
+        self.backend.shortcut_session = None
+        self.backend.shortcut_bindings = {}
+        self.backend.shortcut_events = SimpleQueue()
+        self.backend.shortcut_held = set()
+        self.backend.shortcut_config = None
+        self.backend._call = AsyncMock()
+
+    async def bind(self, hotkey="Ctrl+F8", escape=True):
+        self.backend.set_hotkeys(hotkey, escape)
+        bindings = [["toggle", {"trigger_description": Variant("s", "Ctrl+F9")}]]
+        if escape and hotkey != "Esc":
+            bindings.append(["escape", {"trigger_description": Variant("s", "Escape")}])
+        self.backend._request = AsyncMock(side_effect=[
+            {"session_handle": Variant("s", "/shortcuts/session")},
+            {"shortcuts": Variant("a(sa{sv})", bindings)},
+        ])
+        await self.backend._setup_shortcuts(self.backend.shortcut_config)
+
+    def signal(self, member, action="toggle", session="/shortcuts/session"):
+        self.backend._signal(Message(
+            message_type=MessageType.SIGNAL, path="/org/freedesktop/portal/desktop",
+            interface="org.freedesktop.portal.GlobalShortcuts", member=member,
+            signature="osta{sv}", body=[session, action, 1, {}],
+        ))
+
+    async def test_binding_uses_global_portal_and_desktop_assigned_keys(self):
+        await self.bind()
+        call = self.backend._request.call_args
+        self.assertEqual(call.kwargs["interface"], "org.freedesktop.portal.GlobalShortcuts")
+        self.assertEqual(call.args[1], "oa(sa{sv})sa{sv}")
+        self.assertEqual(call.args[2][1][0][1]["preferred_trigger"].value, "CTRL+F8")
+        self.assertEqual(self.backend.shortcut_bindings["toggle"], "Ctrl+F9")
+        self.assertFalse(self.backend.shortcut_pending)
+        self.assertEqual(self.backend.session, "/pointer/session")
+
+    async def test_quick_taps_survive_release_before_poll_and_repeat_is_ignored(self):
+        await self.bind()
+        self.signal("Activated")
+        self.signal("Activated")
+        self.signal("Deactivated")
+        self.assertEqual(self.backend.take_shortcut_events(), ["toggle"])
+        self.signal("Activated")
+        self.assertEqual(self.backend.take_shortcut_events(), ["toggle"])
+        self.assertEqual(self.backend.take_shortcut_events(), [])
+
+    async def test_foreign_sessions_and_disabled_escape_are_ignored(self):
+        await self.bind(escape=False)
+        self.signal("Activated", session="/other/session")
+        self.signal("Activated", action="escape")
+        self.assertEqual(self.backend.take_shortcut_events(), [])
+        self.assertEqual(len(self.backend._request.call_args.args[2][1]), 1)
+
+    async def test_escape_toggle_does_not_register_conflicting_stop(self):
+        await self.bind("Esc")
+        self.assertEqual(len(self.backend._request.call_args.args[2][1]), 1)
+
+    async def test_rebinding_closes_old_session_and_discards_queued_events(self):
+        await self.bind()
+        self.signal("Activated")
+        await self.backend._close_shortcuts()
+        self.backend._call.assert_awaited_with(
+            "Close", "", [], path="/shortcuts/session", interface="org.freedesktop.portal.Session")
+        self.assertEqual(self.backend.take_shortcut_events(), [])
+        self.assertFalse(self.backend.shortcut_held)
+
+    async def test_denial_keeps_pointer_access_and_allows_retry(self):
+        self.backend.ready = True
+        self.backend.set_hotkeys("F6", True)
+        original = self.backend.shortcut_config
+        self.backend._request = AsyncMock(side_effect=RuntimeError("denied"))
+        await self.backend._setup_shortcuts(original)
+        self.assertTrue(self.backend.ready)
+        self.assertFalse(self.backend.shortcut_pending)
+        self.assertEqual(self.backend.shortcut_bindings, {})
+        self.assertIn("denied", self.backend.shortcut_status)
+        self.backend.set_hotkeys("F6", True)
+        self.assertNotEqual(original, self.backend.shortcut_config)
+
+    async def test_session_revocation_removes_global_bindings(self):
+        await self.bind()
+        self.backend._signal(Message(
+            message_type=MessageType.SIGNAL, path="/shortcuts/session",
+            interface="org.freedesktop.portal.Session", member="Closed",
+        ))
+        self.assertEqual(self.backend.shortcut_bindings, {})
+        self.assertIn("revoked", self.backend.shortcut_status)
+
+    def test_qt_to_xdg_shortcut_conversion(self):
+        for source, expected in (("F6", "F6"), ("Ctrl+Shift+A", "CTRL+SHIFT+a"),
+                                 ("Meta+PgDown", "LOGO+Next"), ("Ctrl++", "CTRL+plus"),
+                                 ("Space", "space"), ("Esc", "Escape")):
+            self.assertEqual(PortalClicker.shortcut_trigger(source), expected)
 
 
 class X11HotkeyTests(unittest.TestCase):

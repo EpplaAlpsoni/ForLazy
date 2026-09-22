@@ -48,8 +48,14 @@ With Baby Mode off, clicking begins immediately.
 
 Settings also lets you replace the default **F6** start/stop hotkey and choose
 whether **Escape** acts as a secondary stop key. The custom hotkey is global on
-X11; Wayland shortcuts work while ForLazy has focus. Enter a shortcut and select
-**Apply**. The Stop button shows every key that can stop the clicker.
+X11 and on Wayland desktops that support the
+[Global Shortcuts portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html).
+On Wayland, approve the desktop's shortcut dialog to use it while another app
+has focus. Enter a shortcut and select **Apply hotkey** to request a new binding.
+The desktop may assign a different shortcut; ForLazy displays the granted keys.
+Escape can also be granted as a global stop key. If a shortcut is denied or the
+portal is unavailable, the app shows that it only works while focused.
+Shortcut permission is separate from pointer-control permission.
 
 Entering or changing the repeat count automatically selects **Repeat**. The
 count represents click actions, so repeating a double-click three times sends
@@ -61,7 +67,7 @@ and restored on the next launch. The file is created with user-only permissions.
 | Desktop session | Start/stop controls |
 | --- | --- |
 | X11 | The configured hotkey toggles globally; optional Escape stops globally. Moving to the top-left corner also stops. |
-| Wayland | The configured hotkey toggles globally. Portal permission may be required for pointer control. |
+| Wayland | Desktop-approved shortcuts toggle/stop globally through the Global Shortcuts portal. Pointer control requires a separate portal grant. |
 
 Wayland uses the desktop's
 [Remote Desktop portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html)
@@ -79,6 +85,7 @@ applications that block synthetic input are not supported.
 - **ForLazy command not found after installation:** launch it from your app menu or run `~/.local/bin/forlazy` directly. Your shell may not include `~/.local/bin` in `PATH`.
 - **Permission denied/cancelled on Wayland:** close ForLazy and reopen it to retry the permission request.
 - **Portal unavailable on Wayland:** your desktop/compositor must provide the Remote Desktop portal. Make sure `xdg-desktop-portal` and the appropriate portal backend for your desktop are available and running.
+- **Wayland hotkey only works while focused:** approve the Global Shortcuts portal dialog. Check the status below Start/Stop for the granted keys or an error, then select **Apply hotkey** to retry. Your desktop must provide the Global Shortcuts portal as well as Remote Desktop.
 - **Cannot connect to X11:** launch ForLazy from a terminal inside your graphical desktop session rather than SSH or a non-graphical session.
 - **Qt cannot load a platform plugin:** remove custom `QT_PLUGIN_PATH` / `QT_QPA_PLATFORM_PLUGIN_PATH` overrides and try again from your normal desktop session.
 - **Clicks do not work in a particular application:** some applications, games, compositors, or security configurations may reject synthetic input even when ForLazy itself is working.

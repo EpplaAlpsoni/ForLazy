@@ -1,9 +1,12 @@
-"""Wayland input through the user-approved RemoteDesktop portal."""
+"""Wayland pointer control and global shortcuts through desktop portals."""
 
 import asyncio
 import os
 import threading
 import uuid
+from queue import Empty, SimpleQueue
+
+from Xlib import XK
 from pathlib import Path
 
 from dbus_next import Message, MessageType, Variant
@@ -23,6 +26,13 @@ class PortalClicker:
         if self.restore_token:
             self.permission_requested.set()
         self.session = None
+        self.shortcut_session = None
+        self.shortcut_config = None
+        self.shortcut_bindings = {}
+        self.shortcut_status = "Waiting for global shortcuts…"
+        self.shortcut_pending = False
+        self.shortcut_events = SimpleQueue()
+        self.shortcut_held = set()
         self.pending = {}
         self.inflight = None
         self.loop = None
@@ -72,11 +82,28 @@ class PortalClicker:
             future = self.pending.get(message.path)
             if future is not None and not future.done():
                 future.set_result(message.body)
+        elif message.interface == "org.freedesktop.portal.GlobalShortcuts":
+            if not message.body or message.body[0] != self.shortcut_session:
+                return
+            if message.member == "ShortcutsChanged":
+                self._update_shortcut_bindings(message.body[1])
+            elif message.member in ("Activated", "Deactivated"):
+                action = message.body[1]
+                if message.member == "Deactivated":
+                    self.shortcut_held.discard(action)
+                elif action in self.shortcut_bindings and action not in self.shortcut_held:
+                    self.shortcut_held.add(action)
+                    self.shortcut_events.put((self.shortcut_session, action))
+        elif (message.interface == "org.freedesktop.portal.Session"
+              and message.member == "Closed" and message.path == self.shortcut_session):
+            self.shortcut_session = None
+            self.shortcut_bindings = {}
+            self.shortcut_status = "Global shortcuts were revoked. Apply hotkey to retry."
         elif message.interface == "org.freedesktop.portal.Session" and message.member == "Closed" and message.path == self.session:
             self.ready = False
             self.error = "Desktop permission was revoked. Reopen ForLazy to reconnect."
 
-    async def _request(self, member, signature, body, options=None):
+    async def _request(self, member, signature, body, options=None, *, interface="org.freedesktop.portal.RemoteDesktop"):
         token = "forlazy" + uuid.uuid4().hex
         sender = self.bus.unique_name[1:].replace(".", "_")
         path = f"/org/freedesktop/portal/desktop/request/{sender}/{token}"
@@ -84,11 +111,14 @@ class PortalClicker:
         self.pending[path] = future
         options = dict(options or {}, handle_token=Variant("s", token))
         try:
-            await self._call(member, signature, [*body, options])
+            await self._call(member, signature, [*body, options], interface=interface)
             response, results = await future
             if response != 0:
                 raise RuntimeError("permission request cancelled or denied")
             return results
+        except asyncio.CancelledError:
+            await self._call("Close", "", [], path=path, interface="org.freedesktop.portal.Request")
+            raise
         finally:
             self.pending.pop(path, None)
 
@@ -97,7 +127,7 @@ class PortalClicker:
         self.bus = await MessageBus().connect()
         self.bus.add_message_handler(self._signal)
         try:
-            for interface in ("Request", "Session"):
+            for interface in ("Request", "Session", "GlobalShortcuts"):
                 reply = await self.bus.call(Message(
                     destination="org.freedesktop.DBus", path="/org/freedesktop/DBus",
                     interface="org.freedesktop.DBus", member="AddMatch", signature="s",
@@ -107,8 +137,16 @@ class PortalClicker:
                     raise RuntimeError("Cannot subscribe to desktop permission responses")
             # Wait for the UI to request access unless a saved grant can be restored.
             setup = None
+            shortcuts = None
+            applied_config = None
             try:
                 while not self.closed.is_set():
+                    if self.shortcut_config != applied_config:
+                        applied_config = self.shortcut_config
+                        if shortcuts is not None:
+                            shortcuts.cancel()
+                            await asyncio.gather(shortcuts, return_exceptions=True)
+                        shortcuts = asyncio.create_task(self._setup_shortcuts(applied_config))
                     if setup is None and self.permission_requested.is_set():
                         setup = asyncio.create_task(self._setup())
                     if setup is not None and setup.done():
@@ -117,6 +155,11 @@ class PortalClicker:
                         raise RuntimeError("Desktop session disconnected")
                     await asyncio.sleep(0.05)
             finally:
+                if shortcuts is not None:
+                    shortcuts.cancel()
+                    await asyncio.gather(shortcuts, return_exceptions=True)
+                # A revoked shortcut session must not interrupt pointer cleanup.
+                await asyncio.gather(self._close_shortcuts(), return_exceptions=True)
                 if setup is not None:
                     setup.cancel()
                     await asyncio.gather(setup, return_exceptions=True)
@@ -151,6 +194,101 @@ class PortalClicker:
         else:
             self.permission_required = True
         self.ready = True
+
+    @staticmethod
+    def shortcut_trigger(hotkey):
+        """Translate Qt portable text to the XDG shortcut syntax."""
+        modifiers = []
+        names = {"Ctrl": "CTRL", "Alt": "ALT", "Shift": "SHIFT", "Meta": "LOGO", "Num": "NUM"}
+        while "+" in hotkey and hotkey.split("+", 1)[0] in names:
+            modifier, hotkey = hotkey.split("+", 1)
+            modifiers.append(names[modifier])
+        aliases = {"Esc": "Escape", "Del": "Delete", "Ins": "Insert",
+                   "PgUp": "Prior", "PgDown": "Next", "Space": "space",
+                   "Backtab": "ISO_Left_Tab", "Enter": "KP_Enter"}
+        key = aliases.get(hotkey, hotkey)
+        if len(key) == 1:
+            # XDG uses keysym names (e.g. plus), never punctuation.
+            import ctypes
+            import ctypes.util
+            library = ctypes.util.find_library("xkbcommon")
+            if library:
+                xkb = ctypes.CDLL(library)
+                xkb.xkb_utf32_to_keysym.argtypes = [ctypes.c_uint32]
+                xkb.xkb_utf32_to_keysym.restype = ctypes.c_uint32
+                xkb.xkb_keysym_get_name.argtypes = [ctypes.c_uint32, ctypes.c_char_p, ctypes.c_size_t]
+                buffer = ctypes.create_string_buffer(64)
+                symbol = xkb.xkb_utf32_to_keysym(ord(key.lower()))
+                if xkb.xkb_keysym_get_name(symbol, buffer, len(buffer)) > 0:
+                    key = buffer.value.decode("ascii")
+            elif key.isalpha():
+                key = key.lower()
+        if not key or not all(c.isalnum() or c == "_" for c in key):
+            raise ValueError(f"Unsupported Wayland hotkey: {hotkey}")
+        if not XK.string_to_keysym(key) and not (key.startswith("U") or key == "ISO_Left_Tab"):
+            raise ValueError(f"Unsupported Wayland hotkey: {hotkey}")
+        return "+".join([*modifiers, key])
+
+    def set_hotkeys(self, hotkey, escape_enabled):
+        trigger = self.shortcut_trigger(hotkey)
+        self.shortcut_pending = True
+        self.shortcut_status = "Approve global shortcuts in the desktop permission dialog…"
+        # A generation also permits retrying a denied request with the same keys.
+        self.shortcut_config = (trigger, escape_enabled, uuid.uuid4().hex)
+
+    def take_shortcut_events(self):
+        events = []
+        while True:
+            try:
+                session, action = self.shortcut_events.get_nowait()
+            except Empty:
+                return events
+            if session == self.shortcut_session and action in self.shortcut_bindings:
+                events.append(action)
+
+    def _update_shortcut_bindings(self, shortcuts):
+        self.shortcut_bindings = {
+            action: properties.get("trigger_description", Variant("s", action)).value
+            for action, properties in shortcuts if action in ("toggle", "escape")
+        }
+        descriptions = [f"{'Start/stop' if action == 'toggle' else 'Stop'}: {trigger}"
+                        for action, trigger in self.shortcut_bindings.items()]
+        self.shortcut_status = ("Global shortcuts • " + " • ".join(descriptions)
+                                if descriptions else "No global shortcuts granted. Apply hotkey to retry.")
+        if "toggle" not in self.shortcut_bindings and descriptions:
+            self.shortcut_status += " • Global start/stop was not granted."
+
+    async def _close_shortcuts(self):
+        session = self.shortcut_session
+        self.shortcut_session = None
+        self.shortcut_bindings = {}
+        self.shortcut_held.clear()
+        if session:
+            await self._call("Close", "", [], path=session, interface="org.freedesktop.portal.Session")
+
+    async def _setup_shortcuts(self, config):
+        try:
+            await self._close_shortcuts()
+            trigger, escape_enabled, generation = config
+            interface = "org.freedesktop.portal.GlobalShortcuts"
+            result = await self._request("CreateSession", "a{sv}", [], {
+                "session_handle_token": Variant("s", "forlazy" + uuid.uuid4().hex),
+            }, interface=interface)
+            self.shortcut_session = result["session_handle"].value
+            shortcuts = [["toggle", {"description": Variant("s", "Start / stop ForLazy"),
+                                      "preferred_trigger": Variant("s", trigger)}]]
+            if escape_enabled and trigger != "Escape":
+                shortcuts.append(["escape", {"description": Variant("s", "Stop ForLazy"),
+                                               "preferred_trigger": Variant("s", "Escape")}])
+            result = await self._request("BindShortcuts", "oa(sa{sv})sa{sv}",
+                                         [self.shortcut_session, shortcuts, ""], interface=interface)
+            self._update_shortcut_bindings(result.get("shortcuts", Variant("a(sa{sv})", [])).value)
+        except Exception as exc:
+            self.shortcut_bindings = {}
+            self.shortcut_status = f"Global shortcuts unavailable: {exc}. Apply hotkey to retry."
+        finally:
+            if config == self.shortcut_config:
+                self.shortcut_pending = False
 
     def pressed_keys(self):
         if self.error:

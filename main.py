@@ -163,6 +163,7 @@ class ForLazyWindow(QMainWindow):
         else:
             help_message = "On Wayland, keyboard shortcuts work while this window has focus"
         help_text = QLabel(help_message, objectName="helpText")
+        self.help_text = help_text
         help_text.setWordWrap(True)
         layout.addWidget(help_text)
 
@@ -360,7 +361,7 @@ class ForLazyWindow(QMainWindow):
         return (
             self.hours, self.minutes, self.seconds, self.interval, self.button,
             self.click_type, self.repeat_forever, self.repeat_limited, self.repeat_count,
-            self.baby_mode, self.baby_delay, self.hotkey_edit, self.escape_stop,
+            self.baby_mode, self.baby_delay, self.hotkey_edit, self.escape_stop, self.apply_hotkey_button,
         )
 
     def hotkey_text(self):
@@ -374,6 +375,7 @@ class ForLazyWindow(QMainWindow):
         if not self.update_hotkeys():
             return
         self.applied_hotkey = self.hotkey_text()
+        self.update_action_labels()
         self.save_settings()
         self.apply_hotkey_button.setText("Applied ✓")
         self.tabs.setCurrentIndex(0)
@@ -404,15 +406,36 @@ class ForLazyWindow(QMainWindow):
                 shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
                 shortcut.activated.connect(callback)
                 self.local_shortcuts.append(shortcut)
+        self.refresh_shortcut_status()
         self.update_action_labels()
         return True
 
+    def refresh_shortcut_status(self):
+        if not hasattr(self.backend, "take_shortcut_events"):
+            return
+        bindings = self.backend.shortcut_bindings
+        pending = self.backend.shortcut_pending
+        for index, shortcut in enumerate(self.local_shortcuts):
+            action = "toggle" if index == 0 else "escape"
+            # Only one route may handle a key, including while the portal binds it.
+            shortcut.setEnabled(not pending and action not in bindings)
+        message = self.backend.shortcut_status
+        if not pending:
+            missing = [name for action, name in (("toggle", "Start/stop"), ("escape", "Escape"))
+                       if action not in bindings and (action != "escape" or self.escape_stop.isChecked())]
+            if missing:
+                message += " • " + ", ".join(missing) + " works only with this window focused."
+        self.help_text.setText(message)
+        self.update_action_labels()
+
     def update_action_labels(self):
-        hotkey = self.hotkey_text()
+        bindings = getattr(self.backend, "shortcut_bindings", {})
+        hotkey = bindings.get("toggle", getattr(self, "applied_hotkey", self.hotkey_text()))
         self.toggle_button.setText(f"Running… ({hotkey})" if self.active else f"Start ({hotkey})")
         stop_keys = hotkey
         if self.escape_stop.isChecked() and hotkey not in ("Esc", "Escape"):
-            stop_keys = f"Esc / {hotkey}"
+            escape = bindings.get("escape", "Esc")
+            stop_keys = f"{escape} / {hotkey}"
         self.stop_button.setText(f"Stop ({stop_keys})")
 
     def toggle(self):
@@ -462,6 +485,13 @@ class ForLazyWindow(QMainWindow):
     def poll(self):
         try:
             keys = self.backend.pressed_keys()
+            if hasattr(self.backend, "take_shortcut_events"):
+                self.refresh_shortcut_status()
+                for action in self.backend.take_shortcut_events():
+                    if action == "escape":
+                        self.stop()
+                    elif action == "toggle":
+                        self.toggle()
             if not self.backend.global_keys:
                 permission_required = getattr(self.backend, "permission_required", False)
                 self.permission_panel.setVisible(permission_required)
@@ -531,6 +561,7 @@ class ForLazyWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("ForLazy")
+    app.setDesktopFileName("forlazy")
     try:
         wayland = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or os.environ.get("WAYLAND_DISPLAY")
         backend = PortalClicker() if wayland else X11Clicker()
