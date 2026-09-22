@@ -7,39 +7,30 @@ Press Start, then move the cursor where you want to click.
 > **Platform:** ForLazy is Linux-only. It uses Linux input interfaces for X11
 > and Wayland and does not support Windows or macOS.
 
-## Install on Linux
+## Install
 
-ForLazy installs for your user account and does not need root access or a distro
-package manager. Download or clone the project, open a terminal in its folder,
-and run:
-
-```bash
-./install.sh
-```
-
-The installer places the app in `~/.local/share/forlazy`, adds the user-wide
-command `~/.local/bin/forlazy`, and creates an application-menu entry. Launch
-**ForLazy** from your desktop's app menu or run:
+1. Download **install-forlazy.sh** from the latest release.
+2. Open a terminal and run:
 
 ```bash
-forlazy
+bash ~/Downloads/install-forlazy.sh
 ```
 
-If your shell does not include `~/.local/bin` in `PATH`, use
-`~/.local/bin/forlazy` directly. The source folder can be moved or deleted after
-installation. Run `./install.sh` again to update an existing installation.
+3. Open **ForLazy** from your app menu.
 
-The first installation needs `curl`, standard Linux desktop libraries, internet
-access, and roughly 1 GB of free space. It downloads a private Python 3.12,
-[uv](https://docs.astral.sh/uv/), and Python dependencies into the installed app
-directory. It does not modify system Python or use `apt`, `dnf`, `pacman`,
-`sudo`, or root access. Later launches work offline.
+That's it. No root, `sudo`, distro package manager, or SteamOS read-only changes are needed.
 
-For a portable checkout without installing a command or menu entry, run
-`bash run.sh` from the project folder.
+The first install needs an internet connection and roughly 1 GB of free space. After installation, ForLazy can launch offline. To update, download the newest installer and run it again.
 
-On SteamOS, perform installation and use from Desktop Mode. The rootless install
-works without disabling the read-only system partition.
+On SteamOS, install and use ForLazy from Desktop Mode.
+
+### Portable / development use
+
+If you cloned the repository and don't want to install ForLazy, run:
+
+```bash
+bash run.sh
+```
 
 ## Use
 
