@@ -58,8 +58,9 @@ six individual clicks.
 All clicker and app settings are saved automatically in `.tools/settings.json`
 and restored on the next launch. The file is created with user-only permissions.
 
-Clicks follow the cursor. Intervals range from 10 ms to one hour; timing is
-best effort, not a real-time guarantee. Settings are locked while running.
+Clicks follow the cursor. Intervals can be as low as 0 ms (as fast as the event
+loop allows), including 1 ms. Timing is best effort, not a real-time guarantee.
+Settings are locked while running.
 
 | Desktop session | Start/stop controls |
 | --- | --- |

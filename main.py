@@ -354,7 +354,7 @@ class ForLazyWindow(QMainWindow):
             self.hours.value() * 3_600_000 + self.minutes.value() * 60_000
             + self.seconds.value() * 1_000 + self.interval.value()
         )
-        return max(10, total)
+        return total
 
     def settings_widgets(self):
         return (
