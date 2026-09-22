@@ -19,11 +19,9 @@ bash ~/Downloads/install-forlazy.sh
 
 3. Open **ForLazy** from your app menu.
 
-That's it. No root, `sudo`, distro package manager, or SteamOS read-only changes are needed.
+That's it. No root, `sudo`, or distro package manager is needed.
 
 The first install needs an internet connection and roughly 1 GB of free space. After installation, ForLazy can launch offline. To update, download the newest installer and run it again.
-
-On SteamOS, install and use ForLazy from Desktop Mode.
 
 ### Portable / development use
 
@@ -89,7 +87,7 @@ applications that block synthetic input are not supported.
 - **Cannot connect to X11:** launch ForLazy from a terminal inside your graphical desktop session rather than SSH or a non-graphical session.
 - **Qt cannot load a platform plugin:** remove custom `QT_PLUGIN_PATH` / `QT_QPA_PLATFORM_PLUGIN_PATH` overrides and try again from your normal desktop session.
 - **Clicks do not work in a particular application:** some applications, games, compositors, or security configurations may reject synthetic input even when ForLazy itself is working.
-- **SteamOS or another immutable distro:** use the rootless installer normally. ForLazy does not require changing the read-only system partition. If the desktop portal itself is missing or broken, repair it using the method recommended by your distribution rather than modifying the system specifically for ForLazy.
+- **Immutable distro:** use the rootless installer normally. ForLazy does not require changing a read-only system partition. If the desktop portal itself is missing or broken, repair it using the method recommended by your distribution.
 
 To uninstall the user-wide installation, remove `~/.local/share/forlazy`,
 `~/.local/bin/forlazy`, and `~/.local/share/applications/forlazy.desktop`.
