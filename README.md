@@ -78,13 +78,14 @@ applications that block synthetic input are not supported.
 
 ## Troubleshooting
 
-- **Download fails:** check your internet connection, then rerun `bash run.sh`.
-- **Permission denied/cancelled on Wayland:** close ForLazy and reopen it to retry.
-- **Portal unavailable:** launch from your KDE Desktop Mode session. A Wayland
-  compositor without a Remote Desktop portal cannot provide this input method.
-- **Cannot connect to X11:** run from a terminal in your desktop session, not SSH.
-- **Qt cannot load a platform plugin:** use the regular SteamOS desktop session
-  and remove custom `QT_PLUGIN_PATH` / `QT_QPA_PLATFORM_PLUGIN_PATH` overrides.
+- **Download fails:** check your internet connection and make sure `curl` is installed, then run the installer again.
+- **ForLazy command not found after installation:** launch it from your app menu or run `~/.local/bin/forlazy` directly. Your shell may not include `~/.local/bin` in `PATH`.
+- **Permission denied/cancelled on Wayland:** close ForLazy and reopen it to retry the permission request.
+- **Portal unavailable on Wayland:** your desktop/compositor must provide the Remote Desktop portal. Make sure `xdg-desktop-portal` and the appropriate portal backend for your desktop are available and running.
+- **Cannot connect to X11:** launch ForLazy from a terminal inside your graphical desktop session rather than SSH or a non-graphical session.
+- **Qt cannot load a platform plugin:** remove custom `QT_PLUGIN_PATH` / `QT_QPA_PLATFORM_PLUGIN_PATH` overrides and try again from your normal desktop session.
+- **Clicks do not work in a particular application:** some applications, games, compositors, or security configurations may reject synthetic input even when ForLazy itself is working.
+- **SteamOS or another immutable distro:** use the rootless installer normally. ForLazy does not require changing the read-only system partition. If the desktop portal itself is missing or broken, repair it using the method recommended by your distribution rather than modifying the system specifically for ForLazy.
 
 To uninstall the user-wide installation, remove `~/.local/share/forlazy`,
 `~/.local/bin/forlazy`, and `~/.local/share/applications/forlazy.desktop`.
