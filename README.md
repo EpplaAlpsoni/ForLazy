@@ -64,7 +64,7 @@ best effort, not a real-time guarantee. Settings are locked while running.
 | Desktop session | Start/stop controls |
 | --- | --- |
 | X11 | The configured hotkey toggles globally; optional Escape stops globally. Moving to the top-left corner also stops. |
-| Wayland | Configured shortcuts work **only while ForLazy has focus**. Alt+Tab back to ForLazy to stop, or end sharing through the desktop's sharing indicator. No corner stop. |
+| Wayland | The configured hotkey toggles globally. Portal permission may be required for pointer control. |
 
 Wayland uses the desktop's
 [Remote Desktop portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html)
