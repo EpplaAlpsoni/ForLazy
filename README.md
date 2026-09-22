@@ -1,4 +1,5 @@
 # ForLazy
+I made this out of pure hatred and spite. Sure, _clicker_ in the discovery could work but I didn't like it. I'm so petty.
 
 A simple Linux autoclicker made with PySide6. Choose an interval, mouse button,
 single or double clicks, and whether to run continuously or for a fixed count.
